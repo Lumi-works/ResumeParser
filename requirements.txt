@@ -1,0 +1,12 @@
+pypdf               # Provides PyPDF2 features from version 3.0 onward
+langchain           # Core LangChain
+langchain-community
+langchain-openai    # Includes ChatOpenAI and related tools
+chromadb            # If using vector store / embeddings
+pytest              # Testing
+python-docx         # For DOCX parsing (remove if not used)
+unstructured         # For unstructured document processing (remove if not used)
+python-dotenv       # For .env file support
+tenacity            # Retry logic (used internally by LangChain)
+streamlit           # UI
+pydantic            # Data models and validation
