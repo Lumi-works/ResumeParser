@@ -1,66 +1,41 @@
-import logging
 import json
-import PyPDF2
-from docx import Document
+import logging
 from io import BytesIO
-from langchain_openai import ChatOpenAI
+from docx import Document
+from pydantic import ValidationError
+from models.schema import Resume
 from langchain.prompts import ChatPromptTemplate
-from models.schema import Resume, Education, Experience
-from uuid import uuid4
-from services.db import ResumeDB
-from pydantic import BaseModel, validator
-from typing import Optional
+from langchain.chat_models import ChatOpenAI
+from PyPDF2 import PdfReader
+from templates.resume_prompt import RESUME_TEMPLATE
 
+# Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-class DocumentParser:
-    @staticmethod
-    def parse_pdf(file_content: bytes) -> str:
-        pdf = PyPDF2.PdfReader(BytesIO(file_content))
-        return "\n".join(page.extract_text() for page in pdf.pages)
-    
+class ResumeParser:
     @staticmethod
     def parse_docx(file_content: bytes) -> str:
         doc = Document(BytesIO(file_content))
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
-
-class ResumeParser:
+    
+    @staticmethod
+    def parse_pdf(file_content: bytes) -> str:
+        try:
+            reader = PdfReader(BytesIO(file_content))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            return text
+        except Exception as e:
+            logger.error(f"PDF parsing failed: {e}")
+            raise ValueError("Text extraction failed: 'parse_pdf' method encountered an error.")
+    
     def __init__(self):
         self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, max_tokens=2000)
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    """You are a precise resume parser. Return ONLY a valid JSON object. 
-Include all bullet points and experiences without truncation, preserving detail. 
-No additional text or formatting beyond the JSON. 
-Example JSON structure:
-{
-    "name": "candidate name",
-    "email": "email",
-    "education": [{
-        "institution": "university name",
-        "degree": "degree type",
-        "field": "field of study",
-        "start_date": "start date",
-        "end_date": "end date",
-        "gpa": "gpa if available"
-    }],
-    "experience": [{
-        "company": "company name",
-        "title": "job title",
-        "location": "location",
-        "start_date": "start date",
-        "end_date": "end date",
-        "highlights": ["bullet points"]
-    }],
-    "skills": {
-        "technical": ["skills"],
-        "tools": ["tools"],
-        "languages": ["languages"]
-    }
-}"""
+                    RESUME_TEMPLATE
                 ),
                 (
                     "user",
@@ -69,8 +44,8 @@ Example JSON structure:
             ],
             template_format="jinja2",
         )
-        self.doc_parser = DocumentParser()
-
+        self.doc_parser = None  # Removed as parsing is handled by static methods
+    
     async def _parse_with_llm(self, text: str) -> Resume:
         try:
             messages = self.prompt.format_messages(text=text)
@@ -78,52 +53,44 @@ Example JSON structure:
 
             # Clean and validate response
             cleaned_response = response.content.strip()
+            logger.debug(f"Cleaned Response: {cleaned_response[:500]}")  # Log first 500 chars
+
             if not cleaned_response.startswith("{"):
                 raise ValueError(f"Invalid JSON format: {cleaned_response[:50]}")
 
             # Parse JSON
             parsed_data = json.loads(cleaned_response)
-            logger.debug(f"Parsed JSON: {parsed_data}")
+            logger.debug(f"Parsed JSON: {parsed_data}")  # Log the full parsed JSON
 
-            # Convert education entries once
-            parsed_education = build_education_list(parsed_data.get("education", []))
-
-            resume = Resume(
-                id=str(uuid4()),
-                name=parsed_data.get("name", "Unknown"),
-                email=parsed_data.get("email", "no-email@example.com"),
-                education=parsed_education,
-                experience=[Experience(**exp) for exp in parsed_data.get("experience", [])],
-                skills=parsed_data.get("skills", {}),
-                projects=parsed_data.get("projects", []),
-                awards=[],
-                metadata={},
-            )
+            # Validate and convert to Resume model
+            try:
+                resume = Resume(**parsed_data)
+                logger.debug("Resume parsed successfully.")
+            except ValidationError as e:
+                logger.error(f"Pydantic Validation Error: {e.json()}")  # Log detailed validation errors
+                raise ValueError(f"Pydantic Validation Error: {e.json()}")
 
             return resume
 
-        except json.JSONDecodeError as je:
-            logger.error(f"JSON parsing failed: {je}")
-            logger.error(f"Raw response: {response.content}")
-            raise ValueError(f"Invalid JSON from LLM: {je}")
         except Exception as e:
-            logger.error(f"LLM parsing error: {str(e)}")
+            logger.error(f"LLM Parsing failed: {str(e)}")
             raise
 
-    def _extract_text(self, file_content: bytes, file_type: str) -> str:
+    async def extract_text(self, file_content: bytes, file_type: str) -> str:
         try:
-            if file_type == 'pdf':
-                return self.doc_parser.parse_pdf(file_content)
-            elif file_type in ['doc', 'docx']:
-                return self.doc_parser.parse_docx(file_content)
+            if file_type == 'docx':
+                return self.parse_docx(file_content)
+            elif file_type == 'pdf':
+                return self.parse_pdf(file_content)
             else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+                raise ValueError("Unsupported file type")
         except Exception as e:
-            raise ValueError(f"Text extraction failed: {str(e)}")
+            logger.error(f"Text extraction failed: {e}")
+            raise ValueError("Text extraction failed") from e
 
     async def process_resume(self, file_content: bytes) -> Resume:
         try:
-            text = self._extract_text(file_content)
+            text = await self.extract_text(file_content)
             resume = await self._parse_with_llm(text)
             resume_id = await ResumeDB.save_resume(resume)
             resume.id = resume_id
