@@ -11,3 +11,8 @@ tenacity            # Retry logic (used internally by LangChain)
 streamlit           # UI
 pydantic            # Data models and validation
 pymongo
+streamlit-auth
+bcrypt
+email-validator
+pydantic[email]
+dateparser

@@ -8,6 +8,8 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.chat_models import ChatOpenAI
 from PyPDF2 import PdfReader
 from templates.resume_prompt import RESUME_TEMPLATE
+from datetime import datetime
+import dateparser
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -44,63 +46,64 @@ class ResumeParser:
             ],
             template_format="jinja2",
         )
-        self.doc_parser = None  # Removed as parsing is handled by static methods
     
-    async def _parse_with_llm(self, text: str) -> Resume:
+    @staticmethod
+    def parse_date(date_str: str) -> str:
+        if not date_str or date_str.lower() == 'present':
+            return datetime.now().strftime('%Y-%m-%d')
+        
+        parsed_date = dateparser.parse(date_str)
+        if parsed_date:
+            return parsed_date.strftime('%Y-%m-%d')
+        raise ValueError(f"Could not parse date: {date_str}")
+
+    def preprocess_dates(self, data: dict) -> dict:
+        if 'employment' in data:
+            for job in data['employment']:
+                if 'start_date' in job:
+                    job['start_date'] = self.parse_date(job['start_date'])
+                if 'end_date' in job:
+                    job['end_date'] = self.parse_date(job['end_date'])
+        return data
+
+    async def parse(self, file_content: bytes, file_type: str, username: str) -> dict:
         try:
+            # Extract text based on file type
+            if file_type == "application/pdf":
+                text = self.parse_pdf(file_content)
+            elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                text = self.parse_docx(file_content)
+            else:
+                raise ValueError(f"Unsupported file type: {file_type}")
+
+            # Parse with LLM
             messages = self.prompt.format_messages(text=text)
             response = await self.llm.ainvoke(messages)
-
-            # Clean and validate response
             cleaned_response = response.content.strip()
-            logger.debug(f"Cleaned Response: {cleaned_response[:500]}")  # Log first 500 chars
 
-            if not cleaned_response.startswith("{"):
-                raise ValueError(f"Invalid JSON format: {cleaned_response[:50]}")
-
-            # Parse JSON
+            # Parse JSON response
             parsed_data = json.loads(cleaned_response)
-            logger.debug(f"Parsed JSON: {parsed_data}")  # Log the full parsed JSON
-
-            # Validate and convert to Resume model
-            try:
-                resume = Resume(**parsed_data)
-                logger.debug("Resume parsed successfully.")
-            except ValidationError as e:
-                logger.error(f"Pydantic Validation Error: {e.json()}")  # Log detailed validation errors
-                raise ValueError(f"Pydantic Validation Error: {e.json()}")
-
-            return resume
-
-        except Exception as e:
-            logger.error(f"LLM Parsing failed: {str(e)}")
-            raise
-
-    async def extract_text(self, file_content: bytes, file_type: str) -> str:
-        try:
-            if file_type == 'docx':
-                return self.parse_docx(file_content)
-            elif file_type == 'pdf':
-                return self.parse_pdf(file_content)
-            else:
-                raise ValueError("Unsupported file type")
-        except Exception as e:
-            logger.error(f"Text extraction failed: {e}")
-            raise ValueError("Text extraction failed") from e
-
-    async def process_resume(self, file_content: bytes) -> Resume:
-        try:
-            text = await self.extract_text(file_content)
-            resume = await self._parse_with_llm(text)
-            resume_id = await ResumeDB.save_resume(resume)
-            resume.id = resume_id
-            return resume
             
+            # Process dates
+            parsed_data = self.preprocess_dates(parsed_data)
+            
+            # Add metadata
+            parsed_data.update({
+                "username": username,
+                "resume_content": text,
+                "file_type": file_type
+            })
+
+            # Validate with Resume model
+            Resume(**parsed_data)
+            return parsed_data
+
+        except ValidationError as e:
+            logger.error(f"Validation error: {e}")
+            raise ValueError(f"Invalid resume format: {str(e)}")
         except Exception as e:
-            logger.error(f"Failed to process resume: {str(e)}")
-            raise
-
-
+            logger.error(f"Parse error: {e}")
+            raise ValueError(f"Failed to parse resume: {str(e)}")
 
 def build_education_list(education_data):
     """Ensures each item is turned into an Education object exactly once."""

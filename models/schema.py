@@ -1,10 +1,11 @@
 from typing import List, Optional, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, EmailStr
+from datetime import datetime
 
 class PersonalInformation(BaseModel):
-    first_name: Optional[str] = None
-    second_name: Optional[str] = None
-    email: Optional[str] = None
+    first_name: str
+    second_name: str
+    email: EmailStr
     phone_number: Optional[str] = None
     linkedin_url: Optional[str] = None
     github_url: Optional[str] = None
@@ -46,16 +47,11 @@ class Education(BaseModel):
         return bool(value)
 
 class Employment(BaseModel):
-    company_name: Optional[str] = None
-    company_website: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    job_title: Optional[str] = None
-    duty_description: Optional[List[str]] = Field(default_factory=list)
-    reference: Optional[str] = None
-    duration: Optional[str] = None
-    tech_keywords: Optional[List[str]] = Field(default_factory=list)
-    leadership: Optional[str] = None
+    company: Optional[str] = None
+    position: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    description: Optional[str] = None
 
 class Internship(BaseModel):
     us_based_internship: Optional[bool] = False
@@ -99,11 +95,14 @@ class AcademicPublication(BaseModel):
     other_information: Optional[str] = None
 
 class Resume(BaseModel):
+    username: str
+    resume_content: str
+    file_type: str
     id: Optional[str] = None
     date_of_entry: Optional[str] = None
     source_of_entry: Optional[str] = None
     goal_of_entry: Optional[str] = None
-    personal_information: Optional[PersonalInformation] = None
+    personal_information: PersonalInformation
     education: Optional[List[Education]] = Field(default_factory=list)
     employment: Optional[List[Employment]] = Field(default_factory=list)
     internship: Optional[List[Internship]] = Field(default_factory=list)
@@ -113,3 +112,7 @@ class Resume(BaseModel):
     academic_publication: Optional[List[AcademicPublication]] = Field(default_factory=list)
     total_years_of_professional_experiences: Optional[str] = None
     highest_leadership: Optional[str] = None
+
+class User(BaseModel):
+    email: EmailStr
+    password: str  # Hashed password

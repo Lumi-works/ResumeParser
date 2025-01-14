@@ -16,6 +16,7 @@ try:
     client = MongoClient(os.getenv('MONGODB_URI'))
     db = client.resume_parser
     resumes_collection = db.resumes
+    users_collection = db.users
     
     # Test connection
     client.admin.command('ping')
